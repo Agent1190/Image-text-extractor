@@ -1,0 +1,52 @@
+### CNIC & Passport Reader API - Test Examples
+### Use with REST Client extension in VS Code or similar tools
+
+@baseUrl = http://localhost:3000
+
+### Health Check
+GET {{baseUrl}}/api/health
+
+### Extract CNIC Data from Image
+POST {{baseUrl}}/api/extract/cnic
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="cnic.jpg"
+Content-Type: image/jpeg
+
+< ./test-cnic.jpg
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+### Extract CNIC Data from PDF
+POST {{baseUrl}}/api/extract/cnic
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="cnic.pdf"
+Content-Type: application/pdf
+
+< ./test-cnic.pdf
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+### Extract Passport Data from Image
+POST {{baseUrl}}/api/extract/passport
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="passport.jpg"
+Content-Type: image/jpeg
+
+< ./test-passport.jpg
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+### Extract Passport Data from PDF
+POST {{baseUrl}}/api/extract/passport
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="passport.pdf"
+Content-Type: application/pdf
+
+< ./test-passport.pdf
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
