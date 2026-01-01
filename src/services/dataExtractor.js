@@ -554,7 +554,7 @@ class DataExtractor {
   /**
    * Extract Passport data from text
    */
-  extractPassportData(text) {
+  extractPassportData(text, mrzData = null) {
     const data = {
       passportNumber: null,
       surname: null,
@@ -566,52 +566,267 @@ class DataExtractor {
       dateOfIssue: null,
       dateOfExpiry: null,
       issuingAuthority: null,
+      husbandName: null,
+      fatherName: null,
+      citizenshipNumber: null,
+      trackingNumber: null,
       rawText: text,
     };
 
-    // Normalize text
+    // If MRZ data is available, use it as primary source (most accurate)
+    if (mrzData) {
+      if (mrzData.passportNumber) data.passportNumber = mrzData.passportNumber;
+      if (mrzData.surname) data.surname = mrzData.surname;
+      if (mrzData.givenNames) data.givenNames = mrzData.givenNames;
+      if (mrzData.nationality) data.nationality = mrzData.nationality;
+      if (mrzData.dateOfBirth) data.dateOfBirth = mrzData.dateOfBirth;
+      if (mrzData.gender) data.gender = mrzData.gender;
+      if (mrzData.dateOfExpiry) data.dateOfExpiry = mrzData.dateOfExpiry;
+      if (mrzData.citizenshipNumber)
+        data.citizenshipNumber = mrzData.citizenshipNumber;
+    }
+
+    // Normalize text - remove extra spaces and newlines
     const normalizedText = text.replace(/\s+/g, " ").trim();
 
-    // Extract passport number (usually alphanumeric, 6-9 characters)
-    const passportPattern =
-      /(?:Passport|P\s*No|Passport\s*No)[:\s]*([A-Z0-9]{6,9})/i;
-    const passportMatch = normalizedText.match(passportPattern);
-    if (passportMatch) {
-      data.passportNumber = passportMatch[1].toUpperCase();
+    // Split text into lines for better extraction (keep empty lines for structure)
+    const allLines = text.split(/\n|\r\n?/);
+    const lines = allLines
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    // Extract Passport Number - find "Passport Number" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (lineUpper.includes("PASSPORT") && lineUpper.includes("NUMBER")) {
+        // Try to get value from same line first (Passport Number: Value)
+        const sameLineMatch = line.match(/Passport\s+Number[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let passportNumber = sameLineMatch[1].trim();
+          if (passportNumber.length >= 6 && passportNumber.length <= 12) {
+            data.passportNumber = passportNumber.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.passportNumber && i + 1 < lines.length) {
+          let passportNumber = lines[i + 1].trim();
+          if (
+            passportNumber.length >= 6 &&
+            passportNumber.length <= 12 &&
+            passportNumber.match(/^[A-Z0-9]+$/)
+          ) {
+            data.passportNumber = passportNumber.toUpperCase();
+            break;
+          }
+        }
+      }
     }
 
-    // Extract dates (DD.MM.YYYY or DD/MM/YYYY format)
-    const datePattern = /(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/g;
-    const dates = normalizedText.match(datePattern) || [];
+    // Fallback: Extract passport number using pattern
+    if (!data.passportNumber) {
+      // Try pattern matching in normalized text
+      const passportPattern =
+        /(?:Passport|P\s*No|Passport\s*No)[:\s]*([A-Z0-9]{6,12})/i;
+      const passportMatch = normalizedText.match(passportPattern);
+      if (passportMatch) {
+        data.passportNumber = passportMatch[1].toUpperCase();
+      }
 
-    // Try to find dates near keywords for better accuracy
-    const dobPattern =
-      /(?:DOB|Date\s+of\s+Birth|Birth)[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i;
-    const issuePattern =
-      /(?:DOI|Date\s+of\s+Issue|Issue)[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i;
-    const expiryPattern =
-      /(?:DOE|Date\s+of\s+Expiry|Expiry|Valid\s+Until)[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i;
-
-    const dobMatch = normalizedText.match(dobPattern);
-    const issueMatch = normalizedText.match(issuePattern);
-    const expiryMatch = normalizedText.match(expiryPattern);
-
-    if (dobMatch) {
-      data.dateOfBirth = dobMatch[1];
-    } else if (dates.length >= 1) {
-      data.dateOfBirth = dates[0];
+      // Fallback: Look for passport number pattern in lines (format: 2 letters + 7-8 digits, e.g., AP0341892)
+      if (!data.passportNumber) {
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const passportMatch = line.match(/\b([A-Z]{2}\d{7,8})\b/);
+          if (passportMatch) {
+            data.passportNumber = passportMatch[1].toUpperCase();
+            break;
+          }
+        }
+      }
     }
 
-    if (issueMatch) {
-      data.dateOfIssue = issueMatch[1];
-    } else if (dates.length >= 2) {
-      data.dateOfIssue = dates[1];
+    // Extract Date of Birth - find "Date of Birth" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (lineUpper.includes("DATE") && lineUpper.includes("BIRTH")) {
+        // Try to get value from same line first
+        const sameLineMatch = line.match(/Date\s+of\s+Birth[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let dateOfBirth = sameLineMatch[1].trim();
+          if (dateOfBirth.match(/\d/)) {
+            data.dateOfBirth = dateOfBirth.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.dateOfBirth && i + 1 < lines.length) {
+          let dateOfBirth = lines[i + 1].trim();
+          if (dateOfBirth.match(/\d/)) {
+            data.dateOfBirth = dateOfBirth.toUpperCase();
+            break;
+          }
+        }
+      }
     }
 
-    if (expiryMatch) {
-      data.dateOfExpiry = expiryMatch[1];
-    } else if (dates.length >= 3) {
-      data.dateOfExpiry = dates[2];
+    // Fallback: Extract date of birth from lines (look for date patterns with month names)
+    if (!data.dateOfBirth) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const lineUpper = line.toUpperCase();
+
+        // Look for date patterns like "10 FEB 1984" or "lo FEB 1984" (OCR error: lo = 10)
+        // Also handle patterns like "- lo FEB 1984" (with leading dash)
+        const dateMatch = line.match(
+          /(?:-?\s*)?(\d{1,2}|[a-z]{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+(\d{4})/i
+        );
+        if (dateMatch) {
+          let day = dateMatch[1];
+          // Fix common OCR errors
+          const dayLower = day.toLowerCase();
+          if (dayLower === "lo" || dayLower === "io" || dayLower === "1o")
+            day = "10";
+          if (dayLower === "o1" || dayLower === "01") day = "01";
+          if (dayLower === "o2" || dayLower === "02") day = "02";
+          if (!day.match(/^\d{1,2}$/)) {
+            // If still not a number, try to extract digits
+            const digitMatch = day.match(/\d/);
+            if (digitMatch) day = digitMatch[0].padStart(2, "0");
+            else day = "10"; // Default fallback
+          }
+          const month = dateMatch[2].toUpperCase();
+          const year = dateMatch[3];
+
+          // Check if this line also has citizenship number (usually DOB and CNIC are on same line)
+          if (line.match(/\d{5}-\d{7}-\d{1}/) || line.match(/\d{13}/)) {
+            data.dateOfBirth = `${day.padStart(2, "0")} ${month} ${year}`;
+            break;
+          }
+        }
+      }
+    }
+
+    // Extract Date of Expiry - find "Date of Expiry" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (
+        lineUpper.includes("DATE") &&
+        (lineUpper.includes("EXPIRY") || lineUpper.includes("EXPIR"))
+      ) {
+        // Try to get value from same line first
+        const sameLineMatch = line.match(/Date\s+of\s+Expiry[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let dateOfExpiry = sameLineMatch[1].trim();
+          if (dateOfExpiry.match(/\d/)) {
+            data.dateOfExpiry = dateOfExpiry.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.dateOfExpiry && i + 1 < lines.length) {
+          let dateOfExpiry = lines[i + 1].trim();
+          if (dateOfExpiry.match(/\d/)) {
+            data.dateOfExpiry = dateOfExpiry.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Extract dates using patterns (support multiple formats: DD MMM YYYY, DD.MM.YYYY, DD/MM/YYYY)
+    // Also handle OCR errors like "lo" -> "10"
+    if (!data.dateOfExpiry) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const lineUpper = line.toUpperCase();
+
+        // Look for date patterns with month names (e.g., "01 MAY 2021")
+        // Handle patterns like "pm "01 MAY 2021" (with leading text)
+        const dateMatch = line.match(
+          /(?:[^0-9]*?)(\d{1,2}|[a-z]{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+(\d{4})/i
+        );
+        if (dateMatch && !lineUpper.includes("BIRTH")) {
+          let day = dateMatch[1];
+          // Fix common OCR errors
+          const dayLower = day.toLowerCase();
+          if (dayLower === "lo" || dayLower === "io" || dayLower === "1o")
+            day = "10";
+          if (dayLower === "o1" || dayLower === "01") day = "01";
+          if (dayLower === "o2" || dayLower === "02") day = "02";
+          if (!day.match(/^\d{1,2}$/)) {
+            const digitMatch = day.match(/\d/);
+            if (digitMatch) day = digitMatch[0].padStart(2, "0");
+            else day = "01"; // Default fallback
+          }
+          const month = dateMatch[2].toUpperCase();
+          const year = dateMatch[3];
+
+          // Check if this line also has tracking number (usually expiry date and tracking number are on same line)
+          if (line.match(/\d{10,12}/)) {
+            data.dateOfExpiry = `${day.padStart(2, "0")} ${month} ${year}`;
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Extract dates using patterns (support multiple formats: DD MMM YYYY, DD.MM.YYYY, DD/MM/YYYY)
+    if (!data.dateOfBirth || !data.dateOfExpiry) {
+      const datePatterns = [
+        /(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4})/gi, // DD MMM YYYY
+        /(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/g, // DD.MM.YYYY or DD/MM/YYYY
+      ];
+
+      const dates = [];
+      for (const pattern of datePatterns) {
+        const matches = normalizedText.matchAll(pattern);
+        for (const match of matches) {
+          if (match[0]) {
+            dates.push(match[0]);
+          }
+        }
+      }
+
+      const dobPatterns = [
+        /(?:DOB|Date\s+of\s+Birth|Birth)[:\s]*(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4})/i,
+        /(?:DOB|Date\s+of\s+Birth|Birth)[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i,
+      ];
+      const expiryPatterns = [
+        /(?:DOE|Date\s+of\s+Expiry|Expiry|Valid\s+Until)[:\s]*(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4})/i,
+        /(?:DOE|Date\s+of\s+Expiry|Expiry|Valid\s+Until)[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i,
+      ];
+
+      for (const pattern of dobPatterns) {
+        const match = normalizedText.match(pattern);
+        if (match && match[1] && !data.dateOfBirth) {
+          data.dateOfBirth = match[1].trim();
+          break;
+        }
+      }
+      if (!data.dateOfBirth && dates.length >= 1) {
+        data.dateOfBirth = dates[0];
+      }
+
+      for (const pattern of expiryPatterns) {
+        const match = normalizedText.match(pattern);
+        if (match && match[1] && !data.dateOfExpiry) {
+          data.dateOfExpiry = match[1].trim();
+          break;
+        }
+      }
+      if (!data.dateOfExpiry && dates.length >= 2) {
+        data.dateOfExpiry = dates[1];
+      }
     }
 
     // Extract gender
@@ -621,55 +836,448 @@ class DataExtractor {
       data.gender = genderMatch[1].toUpperCase();
     }
 
-    // Extract nationality
-    const nationalityPattern = /(?:Nationality|Country)[:\s]+([A-Z\s]{2,})/i;
-    const nationalityMatch = normalizedText.match(nationalityPattern);
-    if (nationalityMatch) {
-      data.nationality = nationalityMatch[1].trim();
-    }
+    // Extract Nationality - find "Nationality" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
 
-    // Extract surname (usually appears first in name field)
-    const surnamePatterns = [
-      /(?:Surname|Last\s+Name)[:\s]+([A-Z\s]+?)(?:\s+Given|$)/i,
-      /^([A-Z]{2,})\s+(?=[A-Z])/,
-    ];
+      if (lineUpper.includes("NATIONALITY") && !lineUpper.includes("NUMBER")) {
+        // Try to get value from same line first (Nationality: Value)
+        const sameLineMatch = line.match(/Nationality[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let nationality = sameLineMatch[1].trim();
+          if (nationality.length >= 3) {
+            data.nationality = nationality.toUpperCase();
+            break;
+          }
+        }
 
-    for (const pattern of surnamePatterns) {
-      const match = normalizedText.match(pattern);
-      if (match && match[1]) {
-        data.surname = match[1].trim();
-        break;
+        // Try next line
+        if (!data.nationality && i + 1 < lines.length) {
+          let nationality = lines[i + 1].trim();
+          if (nationality.length >= 3 && !nationality.match(/^\d/)) {
+            data.nationality = nationality.toUpperCase();
+            break;
+          }
+        }
       }
     }
 
-    // Extract given names
-    const givenNamesPatterns = [
-      /(?:Given\s+Names?|First\s+Name)[:\s]+([A-Z\s]+?)(?:\s+Nationality|$)/i,
-      /(?:Surname[:\s]+[A-Z\s]+)[:\s]+([A-Z\s]{3,})/,
-    ];
-
-    for (const pattern of givenNamesPatterns) {
-      const match = normalizedText.match(pattern);
-      if (match && match[1]) {
-        data.givenNames = match[1].trim();
-        break;
+    // Fallback: Look for PAKISTANI in lines
+    if (!data.nationality) {
+      for (let i = 0; i < lines.length; i++) {
+        const lineUpper = lines[i].toUpperCase();
+        if (lineUpper.includes("PAKISTANI")) {
+          data.nationality = "PAKISTANI";
+          break;
+        }
       }
     }
 
-    // Extract place of birth
-    const placeOfBirthPattern =
-      /(?:Place\s+of\s+Birth|Born\s+in)[:\s]+([A-Z\s,]+?)(?:\s+\d|$)/i;
-    const placeOfBirthMatch = normalizedText.match(placeOfBirthPattern);
-    if (placeOfBirthMatch) {
-      data.placeOfBirth = placeOfBirthMatch[1].trim();
+    // Extract Surname - find "Surname" or "Sur Name" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (
+        (lineUpper.includes("SURNAME") || lineUpper.includes("SUR NAME")) &&
+        !lineUpper.includes("GIVEN")
+      ) {
+        // Try to get value from same line first (Surname: Value)
+        const sameLineMatch = line.match(/(?:Sur\s*)?Name[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let surname = sameLineMatch[1].trim();
+          if (surname.length >= 2 && !surname.match(/^\d/)) {
+            data.surname = surname.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.surname && i + 1 < lines.length) {
+          let surname = lines[i + 1].trim();
+          if (
+            surname.length >= 2 &&
+            !surname.match(/^\d/) &&
+            !surname.toUpperCase().includes("GIVEN")
+          ) {
+            data.surname = surname.toUpperCase();
+            break;
+          }
+        }
+      }
     }
 
-    // Extract issuing authority
-    const authorityPattern =
-      /(?:Issuing\s+Authority|Authority)[:\s]+([A-Z\s]+?)(?:\s+\d|$)/i;
-    const authorityMatch = normalizedText.match(authorityPattern);
-    if (authorityMatch) {
-      data.issuingAuthority = authorityMatch[1].trim();
+    // Extract Given Name - find "Given Name" or "Given Names" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (lineUpper.includes("GIVEN") && lineUpper.includes("NAME")) {
+        // Try to get value from same line first (Given Name: Value)
+        const sameLineMatch = line.match(/Given\s+Names?[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let givenNames = sameLineMatch[1].trim();
+          // Handle multiple words (e.g., "SYEDA FAREEHA")
+          givenNames = givenNames.replace(/\s+/g, " "); // Normalize spaces
+          if (givenNames.length >= 2 && !givenNames.match(/^\d/)) {
+            data.givenNames = givenNames.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.givenNames && i + 1 < lines.length) {
+          let givenNames = lines[i + 1].trim();
+          // Handle multiple words
+          givenNames = givenNames.replace(/\s+/g, " "); // Normalize spaces
+          if (
+            givenNames.length >= 2 &&
+            !givenNames.match(/^\d/) &&
+            !givenNames.toUpperCase().includes("NATIONALITY")
+          ) {
+            data.givenNames = givenNames.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Extract given names from lines (look for name patterns after PASSPORT)
+    if (!data.givenNames) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const lineUpper = line.toUpperCase();
+
+        // Look for lines that contain "PASSPORT" followed by a name (e.g., "PASSPORT SYEDA FAREEHA")
+        if (lineUpper.includes("PASSPORT") && !lineUpper.includes("NUMBER")) {
+          // Try to extract name from same line after "PASSPORT"
+          // Handle patterns like "PASSPORT SYEDA FAREEHA i j" (with trailing junk)
+          const nameMatch = line.match(/PASSPORT\s+([A-Z\s]{3,40})/i);
+          if (nameMatch && nameMatch[1]) {
+            let givenNames = nameMatch[1].trim();
+            // Remove trailing single letters/junk (e.g., "i j" at the end)
+            givenNames = givenNames.replace(/\s+[a-z]\s*$/i, "").trim();
+            givenNames = givenNames.replace(/\s+[a-z]\s+[a-z]\s*$/i, "").trim(); // Remove "i j"
+            givenNames = givenNames.replace(/\s+/g, " ");
+            // Check if it looks like a name (not just "PAKISTAN" or other keywords)
+            if (
+              givenNames.length >= 3 &&
+              !givenNames.toUpperCase().includes("PAKISTAN") &&
+              !givenNames.toUpperCase().includes("NUMBER") &&
+              givenNames.split(/\s+/).length >= 1 &&
+              givenNames.split(/\s+/).length <= 4
+            ) {
+              // Usually 1-4 words
+              data.givenNames = givenNames.toUpperCase();
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Extract place of birth - find "Place of Birth" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (lineUpper.includes("PLACE") && lineUpper.includes("BIRTH")) {
+        // Try to get value from same line first
+        const sameLineMatch = line.match(/Place\s+of\s+Birth[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let placeOfBirth = sameLineMatch[1].trim();
+          if (placeOfBirth.length >= 3) {
+            data.placeOfBirth = placeOfBirth.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.placeOfBirth && i + 1 < lines.length) {
+          let placeOfBirth = lines[i + 1].trim();
+          if (placeOfBirth.length >= 3) {
+            data.placeOfBirth = placeOfBirth.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Extract place of birth from lines (look for city names followed by PAK)
+    if (!data.placeOfBirth) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const lineUpper = line.toUpperCase();
+
+        // Look for patterns like "SIALKOT, PAK" or "LAHORE, PAK" or "KARACHI, PAK"
+        const placeMatch = line.match(/([A-Z\s]{3,20}),\s*PAK/i);
+        if (placeMatch) {
+          let place = placeMatch[1].trim();
+          // Clean up OCR errors
+          place = place.replace(/Fy\s+/i, ""); // Remove "Fy" OCR error
+          if (place.length >= 3 && place.length <= 30) {
+            data.placeOfBirth = `${place.toUpperCase()}, PAK`;
+            break;
+          }
+        }
+      }
+    }
+
+    // Extract Father Name - find "Father Name" or "Father" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (
+        (lineUpper.includes("FATHER") && lineUpper.includes("NAME")) ||
+        (lineUpper.includes("FATHER") && !lineUpper.includes("HUSBAND"))
+      ) {
+        // Try to get value from same line first (Father Name: Value)
+        const sameLineMatch = line.match(/Father\s+Name[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let fatherName = sameLineMatch[1].trim();
+          // Handle comma-separated names (e.g., "SHAH, SYED MUKHTAR HUSSAIN")
+          fatherName = fatherName.replace(/\s+/g, " "); // Normalize spaces
+          if (fatherName.length >= 2 && !fatherName.match(/^\d/)) {
+            data.fatherName = fatherName.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.fatherName && i + 1 < lines.length) {
+          let fatherName = lines[i + 1].trim();
+          // Handle comma-separated names
+          fatherName = fatherName.replace(/\s+/g, " "); // Normalize spaces
+          if (fatherName.length >= 2 && !fatherName.match(/^\d/)) {
+            data.fatherName = fatherName.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Extract father name from lines (look for comma-separated name patterns)
+    if (!data.fatherName) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const lineUpper = line.toUpperCase();
+
+        // Look for lines with comma-separated names (e.g., "SHAH, SYED MUKHTAR HUSSAIN")
+        // Usually appears after place of birth or gender
+        if (
+          line.includes(",") &&
+          line.match(/^[A-Z][A-Z\s,]{5,40}$/) && // Starts with capital, has comma, reasonable length
+          !lineUpper.includes("PAKISTAN") &&
+          !lineUpper.includes("SIALKOT") &&
+          !lineUpper.includes("LAHORE") &&
+          !lineUpper.includes("KARACHI") &&
+          line.split(",").length === 2
+        ) {
+          // Has exactly one comma
+          // Clean up OCR errors (remove leading "a" or other single letters/words)
+          let fatherName = line.replace(/^[a-z]\s+/i, "").trim(); // Remove leading single letter
+          fatherName = fatherName.replace(/^[a-z]{1,2}\s+/i, "").trim(); // Remove leading 1-2 letter words
+          fatherName = fatherName.replace(/\s+/g, " ");
+          // Make sure it still has a comma after cleaning
+          if (
+            fatherName.includes(",") &&
+            fatherName.length >= 5 &&
+            fatherName.length <= 50
+          ) {
+            data.fatherName = fatherName.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    // Extract Date of Issue - find "Date of Issue" or "Date of Issuance" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (
+        (lineUpper.includes("DATE") && lineUpper.includes("ISSUE")) ||
+        (lineUpper.includes("DATE") && lineUpper.includes("ISSUANCE"))
+      ) {
+        // Try to get value from same line first
+        const sameLineMatch = line.match(
+          /Date\s+of\s+(?:Issue|Issuance)[:\s]+(.+)$/i
+        );
+        if (sameLineMatch && sameLineMatch[1]) {
+          let dateOfIssue = sameLineMatch[1].trim();
+          if (dateOfIssue.match(/\d/)) {
+            data.dateOfIssue = dateOfIssue.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.dateOfIssue && i + 1 < lines.length) {
+          let dateOfIssue = lines[i + 1].trim();
+          if (dateOfIssue.match(/\d/)) {
+            data.dateOfIssue = dateOfIssue.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    // Extract Issuing Authority - find "Issuing Authority" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (lineUpper.includes("ISSUING") && lineUpper.includes("AUTHORITY")) {
+        // Try to get value from same line first
+        const sameLineMatch = line.match(/Issuing\s+Authority[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let authority = sameLineMatch[1].trim();
+          if (authority.length >= 3) {
+            data.issuingAuthority = authority.toUpperCase();
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.issuingAuthority && i + 1 < lines.length) {
+          let authority = lines[i + 1].trim();
+          if (authority.length >= 3 && !authority.match(/^\d/)) {
+            data.issuingAuthority = authority.toUpperCase();
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Look for PAKISTAN as issuing authority
+    if (!data.issuingAuthority) {
+      for (let i = 0; i < lines.length; i++) {
+        const lineUpper = lines[i].toUpperCase();
+        if (
+          lineUpper.includes("PAKISTAN") &&
+          (lineUpper.includes("AUTHORITY") ||
+            lineUpper.includes("ISSUING") ||
+            i > 5)
+        ) {
+          data.issuingAuthority = "PAKISTAN";
+          break;
+        }
+      }
+    }
+
+    // Extract Tracking Number - find "Tracking Number" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (lineUpper.includes("TRACKING") && lineUpper.includes("NUMBER")) {
+        // Try to get value from same line first
+        const sameLineMatch = line.match(/Tracking\s+Number[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let trackingNumber = sameLineMatch[1].trim();
+          if (trackingNumber.length >= 5) {
+            data.trackingNumber = trackingNumber;
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.trackingNumber && i + 1 < lines.length) {
+          let trackingNumber = lines[i + 1].trim();
+          if (trackingNumber.length >= 5 && trackingNumber.match(/^\d+$/)) {
+            data.trackingNumber = trackingNumber;
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Extract tracking number from lines (look for long numeric patterns, usually 10-11 digits)
+    if (!data.trackingNumber) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        // Look for long numeric strings (10-12 digits) that aren't dates or CNIC
+        const trackingMatch = line.match(/\b(\d{10,12})\b/);
+        if (trackingMatch) {
+          const num = trackingMatch[1];
+          // Make sure it's not a date (doesn't match date patterns)
+          if (
+            !num.match(/\d{4}$/) || // Doesn't end with 4 digits (year)
+            (num.length === 11 && !num.match(/\d{5}-\d{7}-\d{1}/))
+          ) {
+            // Not CNIC format
+            data.trackingNumber = num;
+            break;
+          }
+        }
+      }
+    }
+
+    // Extract Citizenship Number - find "Citizenship Number" label and get value from line below
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineUpper = line.toUpperCase();
+
+      if (lineUpper.includes("CITIZENSHIP") && lineUpper.includes("NUMBER")) {
+        // Try to get value from same line first
+        const sameLineMatch = line.match(/Citizenship\s+Number[:\s]+(.+)$/i);
+        if (sameLineMatch && sameLineMatch[1]) {
+          let citizenshipNumber = sameLineMatch[1].trim();
+          if (citizenshipNumber.match(/\d/)) {
+            data.citizenshipNumber = citizenshipNumber;
+            break;
+          }
+        }
+
+        // Try next line
+        if (!data.citizenshipNumber && i + 1 < lines.length) {
+          let citizenshipNumber = lines[i + 1].trim();
+          if (citizenshipNumber.match(/\d/)) {
+            data.citizenshipNumber = citizenshipNumber;
+            break;
+          }
+        }
+      }
+    }
+
+    // Fallback: Extract citizenship number from lines (look for CNIC format: #####-#######-#)
+    if (!data.citizenshipNumber) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        // Look for CNIC format: #####-#######-# (e.g., 61101-8823189-0)
+        const cnicMatch = line.match(/(\d{5}-\d{7}-\d{1})/);
+        if (cnicMatch) {
+          data.citizenshipNumber = cnicMatch[1];
+          break;
+        }
+
+        // Also try 13-digit format without dashes
+        const cnicMatch2 = line.match(/\b(\d{13})\b/);
+        if (cnicMatch2) {
+          const cnic = cnicMatch2[1];
+          // Format as #####-#######-#
+          data.citizenshipNumber = `${cnic.substring(0, 5)}-${cnic.substring(
+            5,
+            12
+          )}-${cnic.substring(12)}`;
+          break;
+        }
+      }
+    }
+
+    // Fallback patterns for fields not found by labels
+    if (!data.dateOfIssue) {
+      const issuePattern =
+        /(?:DOI|Date\s+of\s+Issue|Date\s+of\s+Issuance|Issue)[:\s]*(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4})/i;
+      const issueMatch = normalizedText.match(issuePattern);
+      if (issueMatch) {
+        data.dateOfIssue = issueMatch[1].trim();
+      }
     }
 
     return data;
@@ -682,7 +1290,27 @@ class DataExtractor {
     const cleaned = { ...data };
 
     // Always keep these important fields even if null
-    const requiredFields = ["name", "fatherName", "country", "cnicNumber"];
+    // CNIC fields
+    const cnicRequiredFields = ["name", "fatherName", "country", "cnicNumber"];
+    // Passport fields
+    const passportRequiredFields = [
+      "passportNumber",
+      "surname",
+      "givenNames",
+      "nationality",
+      "fatherName",
+      "dateOfIssue",
+      "issuingAuthority",
+      "trackingNumber",
+      "husbandName",
+      "citizenshipNumber",
+    ];
+
+    // Determine which set of required fields to use based on data structure
+    const isPassport = "passportNumber" in data || "surname" in data;
+    const requiredFields = isPassport
+      ? passportRequiredFields
+      : cnicRequiredFields;
 
     // Remove null values for cleaner output, but keep required fields
     Object.keys(cleaned).forEach((key) => {
